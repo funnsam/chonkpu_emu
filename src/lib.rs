@@ -65,8 +65,10 @@ impl<'a> Chonkpu<'a> {
                     pc_inc = r2;
                     set_pc = true;
                 },
-                0x6 => if (r1 & 0x80) != 0 { pc_inc = r2; },
-                0x7 => pc_inc = r2,
+                0x6 => {
+                    if (r1 & 0x80) == 0 { pc_inc = dec.imm; }
+                },
+                0x7 => pc_inc = dec.imm,
                 0x8 => result = r1 + r2,
                 0x9 => result = !(r1 | r2),
                 0xa => result = r1 + dec.imm,
@@ -85,22 +87,22 @@ impl<'a> Chonkpu<'a> {
 
         if let Some(fet) = &self.fetch_stage {
             let op = (fet.data >> 8) as u8;
-            let a = (fet.data >> 4) as u8;
-            let b = (fet.data >> 0) as u8;
+            let a = ((fet.data >> 4) as u8) & 15;
+            let b = ((fet.data >> 0) as u8) & 15;
             self.decode_stage = Some(Decode {
                 r1: a,
                 r2: if (op & 2) == 0 {
-                    a
+                    b
                 } else {
                     15
                 },
                 imm: if (op & 2) == 0 {
                     0
                 } else {
-                    b
+                    ((b as i8) << 4 >> 4) as u8
                 },
                 read_r1: (op & 7) != 7,
-                write: !matches!(op, 0 | 2 | 4 | 5 | 6 | 7),
+                write: !matches!(op, 1 | 3 | 4 | 5 | 6 | 7),
                 op,
             })
         }
@@ -150,59 +152,45 @@ impl<'a> Chonkpu<'a> {
     }
 
     fn write_mem(&mut self, a: u8, d: u8) {
-        if a > 4 {
+        if a < 4 {
             let port = (a >> 1) as usize;
             if a & 1 == 0 {
-                unimplemented!();
+                warn!("wrote to IO addr 0 {:02x} -> {:02x}", d, a);
             } else {
                 self.ports[port].out_data = Some(d);
             }
-        } else if a <= 0xF0 {
+        } else if a >= 0xF0 {
             self.ram[a as usize - 0xF0] = d;
         } else {
             warn!("wrote unmapped address {:02x} -> {:02x}", d, a);
         }
     }
 
-    pub fn port_1_writable(&self) -> bool {
-        self.ports[0].in_data.is_none()
+    pub fn port_writable(&self, p: usize) -> bool {
+        self.ports[p].in_data.is_none()
     }
 
-    pub fn port_1_readable(&self) -> bool {
-        self.ports[0].out_data.is_some()
+    pub fn port_readable(&self, p: usize) -> bool {
+        self.ports[p].out_data.is_some()
     }
 
-    pub fn port_1_write(&mut self, d: u8) {
-        self.ports[0].in_data = Some(d);
+    pub fn port_write(&mut self, p: usize, d: u8) {
+        self.ports[p].in_data = Some(d);
     }
 
-    pub fn port_1_read(&mut self) -> Option<u8> {
-        self.ports[0].out_data
-    }
-
-    pub fn port_2_writable(&self) -> bool {
-        self.ports[1].in_data.is_none()
-    }
-
-    pub fn port_2_readable(&self) -> bool {
-        self.ports[1].out_data.is_some()
-    }
-
-    pub fn port_2_write(&mut self, d: u8) {
-        self.ports[1].in_data = Some(d);
-    }
-
-    pub fn port_2_read(&mut self) -> Option<u8> {
-        self.ports[1].out_data
+    pub fn port_read(&mut self, p: usize) -> Option<u8> {
+        core::mem::take(&mut self.ports[p].out_data)
     }
 }
 
 use core::fmt;
 impl<'a> fmt::Debug for Chonkpu<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (ri, r) in self.regs.iter().enumerate() {
-            writeln!(f, "r{}: {r:02x}", ri + 1)?;
+        write!(f, "regs: ")?;
+        for r in self.regs.iter() {
+            write!(f, "{r:02x} ")?;
         }
+        writeln!(f)?;
 
         writeln!(f, "pc: {:02x}", self.pc)?;
         writeln!(f, "ram content:")?;
